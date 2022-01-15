@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>モーションキャプチャ</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"></script>
+<script>
+let model;						// PoseNetモデル 6-7行目：TensorFlowライブラリと学習済みモデル「PoseNet」を読み込む
+let canvas,context,video;		// キャンパス、ビデオ
+let poses = new Array();		// ポーズ
+let images = new Array();		// キャプチャ画像
+let sources = new Array();		// キャプチャ画像ソース
+let sTime = 0,eTime = 0;		// 開始位置、終了位置
+let index = 0,timer;			// インデックス、タイマー
+// 接続ポイント
+const body = [[5,6],[5,11],[6,12],[11,12],	// 体
+	[5,7],[7,9],[6,8],[8,10], 				// 手
+	[11,13],[13,15],[12,14],[14,16]];		// 足
+
+const init = async () => {
+	// PoseNetモデルの続み込み
+	model = await posenet.load();
+	// キャンバス、ビデオ要素の取得　25行目：キャンパス(169行)を取得、27行目：キャンパス(168行)を取得
+	canvas = document.getElementById("image");
+	context = canvas.getContext("2d");
+	video = document.getElementById("video");
+	// ポタンの無効化　29‐30行目：「キャプチャ」ボタン(163行)、「モーションを再生」ボタン(165行)を無効化
+	document.getElementById("capButton").disabled = true;
+	document.getElementById("playButton").disabled = true;
+}
+
+const loadVideo = files => {
+	// 動画の読み込み　33行目：files=「ファイルを選択」ボタン(162行)で指定した動画ファイル　37行目：キャンパスの横幅をビデオの縦横比から計算(高さは270px固定)
+	video.src = URL.createObjectURL(files[0]);
+	video.onloadedmetadata = () => {
+		canvas.width = 270 * video.videoWidth/video.videoHeight;
+		let maxTime = video.duration;		
+		if (!isFinite(maxTime)) maxTime = 10;
+		document.getElementById("time").max = maxTime;
+		document.getElementById("time_0").max = maxTime;
+		document.getElementById("time_1").max = maxTime;
+		document.getElementById("message").innerText = "";
+	}
+	// 再生位置を表示　38‐42行目：再生時間を取得し、プログレスバー(171行)とスライダー(174行、176行)にセット。取得できないときは10(秒)とする　43行目：メッセージ(166行)をクリア　46行目：動画の再生位置が変化したとき　48‐49行目：再生位置をプログレスバーにセットし、秒数を表示
+	video.ontimeupdate = () => {
+		const sec = video.currentTime;
+		document.getElementById("time").value = video.currentTime;
+		document.getElementById("sec").innerText = sec.toFixed(1);
+	}
+}
+
+const setRange = n => {
+	// 位置を取得　55行目：値を変更したスライダーの値を取得
+	const time = document.getElementById(`time_${n}`).value;
+	document.getElementById(`sec_${n}`).innerText = time;
+	video.currentTime = time;
+	// 再生区間をセット　59‐60行目：開始位置と終了位置を表示
+	sTime = Number(document.getElementById("time_0").value);
+	eTime = Number(document.getElementById("time_1").value);
+	if (sTime > eTime) [sTime,eTime] = [eTime,sTime];
+	document.getElementById("sSec").innerText = stime;
+	document.getElementById("eSec").innerText = etime;
+	// 「キャプチャ」ボタンの無効化
+	document.getElementById("capButton").disabled = false;
+	if (sTime == eTime) {
+		document.getElementById("capButton").disabled = true;
+	}
+	document.getElementById("message").innerText = "";
+}
+
+const startCapture = () => {
+	// キャプチャ開始 74行目：配列poses、images、sourcesをクリア　75行目：動画の再生位置に開始位置をセット　76行目：動画を再生　77行目：100ミリ秒(＝0.1秒)ごとにcapture()関数を実行
+	[poses,images,sources] = [[],[],[]];
+	video.currentTime = sTime;
+	video.play();
+	timer = setInterval(capture,100);
+	document.getElementById("capButton").disabled = true;
+	document.getElementById("playButton").disabled = true;
+	document.getElementById("message").innerText = "キャプチャ中...";
+	document.getElementById("progress").value = 0;
+}
+
+const capture = () => {
+	// 動画のキャプチャ 86行目：動画が再生中なら 87行目：動画をキャンパスに描画 88行目：キャンパスのURLを保存
+	if (video.currentTime < eTime) {
+		context.drawImage(video,0,0,canvas.width,canvas.height);
+		sources.push(canvas.toDataURL());
+	} else {
+		// キャプチャ終了　91行目：77行で作成したタイマーIDをクリア　92行目：動画の再生を一時停止
+		clearInterval(timer);
+		video.pause();
+		// ポーズを検出
+		index = 0;
+		document.getElementById("progress").max = sources.lenght;
+		document.getElementById("message").innerText = "モーション検出中...";
+		detect();
+	}
+}
+
+const detect = async () => {
+	// キャプチャした画像の読み込み　103‐104行目：画像オブジェクトを作成し、sourcesに保存したURLから画像を読み込む
+	const image = new Image();
+	image.src = sources[index];
+	image.onload = async () => {
+		// ポーズを検出　107行目：姿勢検出　108‐109行目：検出結果と画像を保存　112‐113行目：キャプチャーした画像が残っているなら検出を続ける
+		const pose = await model.estimateMultiplePoses(image);
+		poses.push(pose);
+		images.push(image);
+		index++;
+		document.getElementById("progress").value = index;
+		if (index < sources.lenght){
+			detect();
+		} else {
+			// 検出完了
+			document.getElementById("capButton").disabled = false;
+			document.getElementById("playButton").disabled = false;
+			document.getElementById("message").innerText += "完了";
+		}
+	}
+}
+
+const play = () => {
+	// 再生　123行目：「モーションを再生」ボタンを押したとき
+	index = 0;
+	timer = setInterval(drawPose,100);
+}
+
+const drawPose = () => {
+	// 画像をキャンパスに描画　132行目：検出した人数ぶん繰り返し
+	context.drawImage(images[index],0,0);
+	for (const pose of poses[index]) {
+		// ポーズの描画　134行目：接続ポイント(17行～19行でセット)を取り出す　135‐144行目：体のパーツを黄緑色の線で結ぶ
+		for (const parts of body) {
+			const x1 = pose.keypoints[parts[0]].position.x;
+			const y1 = pose.keypoints[parts[0]].position.y;
+			const x2 = pose.keypoints[parts[1]].position.x;
+			const y2 = pose.keypoints[parts[1]].position.y;
+			context.strokeStyle = "#00FF00";
+			context.lineWidth = 2;
+			context.beginPath();
+			context.moveTo(x1,y1);
+			context.lineTo(x2,y2);
+			context.stroke();
+		}
+	}
+	index++;
+	if (index == images.lenght) clearInterval(timer);
+}
+</script>
+<style>
+#message {color: #009900;}
+.border {border: thin solid #CCCCCC;}
+input[type="range"] {
+	margin: 0px;
+	width: 480px;
+}
+#time {width: 480px;}
+</style>
+<body onload="init()">
+<p>モーションキャプチャ</p>
+<input type="file" accept="video/*" onchange="loadVideo(this.files)">
+<input type="button" id="capButton" value="キャプチャ" onclick="startCapture()">
+<progress id="progress" value="0" min="0"></progress>
+<input type="button" id="playButton" value="モーションを再生" onclick="play()">
+<span id="message"></span>
+<hr>
+<video id="video" class="border" width="480" height="270" muted></video>
+<canvas id="image" class="border" width="480" height="270"></canvas>
+<br>
+<progress id="time" value="0" min="0" max="10" step="0.1"></progress>
+[<span id="sec">0</span>s]<br>
+再生区間：<span id="sSec">0</span>s～<span id="eSec">0</span>s<br>
+<input type="range" id="time_0" value="0" step="0.1" onchange="setRange(0)">
+[<span id="sec_0">0</span>s]<br>
+<input type="range" id="time_1" value="0" step="0.1" onchange="setRange(1)">
+[<span id="sec_1">0</span>s]
+</body>
+</html>
